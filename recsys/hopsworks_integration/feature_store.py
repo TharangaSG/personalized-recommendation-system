@@ -63,23 +63,126 @@ def create_articles_feature_group(
     return articles_fg
 
 
-def create_transactions_feature_group(
-        fs, df: pd.DataFrame, online_enabled: bool = True
-):
+def create_transactions_feature_group(fs, df: pd.DataFrame, online_enabled: bool = True):
+    """Create and insert transactions feature group in Hopsworks."""
+
+    # 🔥 Ensure `month_sin` and `month_cos` are not duplicated
+    if "month_sin" in df.columns or "month_cos" in df.columns:
+        print("⚠️ Warning: month_sin and month_cos already exist in the DataFrame. Skipping transformation.")
+    else:
+        df["month_sin"] = np.sin(df["month"] * (2 * np.pi / 12))
+        df["month_cos"] = np.cos(df["month"] * (2 * np.pi / 12))
+
+    # ✅ Remove transformation_functions to avoid duplication
     trans_fg = fs.get_or_create_feature_group(
         name="transactions",
         version=1,
-        description="Transactions data including customer, item, price, sales channel and transaction date",
+        description="Transactions data including customer, item, price, sales channel, and transaction date",
         primary_key=["customer_id", "article_id"],
         online_enabled=online_enabled,
-        transformation_functions=[month_sin, month_cos],
-        event_time="t_dat",
+        event_time="t_dat",  # Keep event time
     )
+
+    # Insert data into the feature group
     trans_fg.insert(df, wait=True)
 
+    # Update feature descriptions
     for desc in constants.transactions_feature_descriptions:
         trans_fg.update_feature_description(desc["name"], desc["description"])
 
     return trans_fg
 
 
+
+
+#Feature Views #
+
+
+def create_retrieval_feature_view(fs):
+    trans_fg = fs.get_feature_group(name="transactions", version=1)
+    customers_fg = fs.get_feature_group(name="customers", version=1)
+    articles_fg = fs.get_feature_group(name="articles", version=1)
+
+    # You'll need to join these three data sources to make the data compatible
+    # with out retrieval model. Recall that each row in the `transactions` feature group
+    # relates information about which customer bought which item.
+    # You'll join this feature group with the `customers` and `articles` feature groups
+    # to inject customer and item features into each row.
+    selected_features = (
+        trans_fg.select(
+            ["customer_id", "article_id", "t_dat", "price", "month_sin", "month_cos"]
+        )
+        .join(
+            customers_fg.select(["age"]),
+            on="customer_id",
+        )
+        .join(
+            articles_fg.select(["garment_group_name", "index_group_name"]),
+            on="article_id",
+        )
+    )
+
+    feature_view = fs.get_or_create_feature_view(
+        name="retrieval",
+        query=selected_features,
+        version=1,
+    )
+
+    return feature_view
+
+
+def create_ranking_feature_views(fs):
+    customers_fg = fs.get_feature_group(
+        name="customers",
+        version=1,
+    )
+
+    articles_fg = fs.get_feature_group(
+        name="articles",
+        version=1,
+    )
+
+    rank_fg = fs.get_feature_group(
+        name="ranking",
+        version=1,
+    )
+
+    trans_fg = fs.get_feature_group(
+        name="transactions",
+        version=1)
+
+    selected_features_customers = customers_fg.select_all()
+    fs.get_or_create_feature_view(
+        name="customers",
+        query=selected_features_customers,
+        version=1,
+    )
+
+    selected_features_articles = articles_fg.select_except(["embeddings"])
+    fs.get_or_create_feature_view(
+        name="articles",
+        query=selected_features_articles,
+        version=1,
+    )
+
+    # Select features
+    selected_features_ranking = rank_fg.select_except(["customer_id", "article_id"]).join(trans_fg.select(["month_sin", "month_cos"]))
+    feature_view_ranking = fs.get_or_create_feature_view(
+        name="ranking",
+        query=selected_features_ranking,
+        labels=["label"],
+        version=1,
+    )
+
+    return feature_view_ranking
+
+
+def create_candidate_embeddings_feature_view(fs, fg):
+    feature_view = fs.get_or_create_feature_view(
+        name="candidate_embeddings",
+        version=1,
+        description="Embeddings of each article",
+        query=fg.select(["article_id"]),
+    )
+
+    return feature_view
