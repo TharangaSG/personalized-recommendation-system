@@ -92,8 +92,45 @@ def create_transactions_feature_group(fs, df: pd.DataFrame, online_enabled: bool
 
     return trans_fg
 
+def create_ranking_feature_group(
+    fs, df: pd.DataFrame, parents: list, online_enabled: bool = True
+):
+    rank_fg = fs.get_or_create_feature_group(
+        name="ranking",
+        version=1,
+        description="Derived feature group for ranking",
+        primary_key=["customer_id", "article_id"],
+        parents=parents,
+        online_enabled=online_enabled,
+    )
+    rank_fg.insert(df, wait=True)
 
+    for desc in constants.ranking_feature_descriptions:
+        rank_fg.update_feature_description(desc["name"], desc["description"])
 
+    return rank_fg
+
+def create_candidate_embeddings_feature_group(
+        fs, df: pd.DataFrame, online_enabled: bool = True
+):
+    embedding_index = embedding.EmbeddingIndex()
+
+    embedding_index.add_embedding(
+        "embeddings",  # Embeddings feature name
+        settings.TWO_TOWER_MODEL_EMBEDDING_SIZE,
+    )
+
+    candidate_embeddings_fg = fs.get_or_create_feature_group(
+        name="candidate_embeddings",
+        embedding_index=embedding_index,  # Specify the Embedding Index
+        primary_key=["article_id"],
+        version=1,
+        description="Embeddings for each article.",
+        online_enabled=online_enabled,
+    )
+    candidate_embeddings_fg.insert(df, wait=True)
+
+    return candidate_embeddings_fg
 
 #Feature Views #
 
@@ -110,12 +147,12 @@ def create_retrieval_feature_view(fs):
     # to inject customer and item features into each row.
     selected_features = (
         trans_fg.select(
-            ["customer_id", "article_id", "t_dat", "price", "month_sin", "month_cos"]
+            ["customer_id", "article_id", "price", "month_sin", "month_cos"]
         )
-        .join(
-            customers_fg.select(["age"]),
-            on="customer_id",
-        )
+        # .join(
+        #     customers_fg.select(["age"]),
+        #     on="customer_id",
+        # )
         .join(
             articles_fg.select(["garment_group_name", "index_group_name"]),
             on="article_id",
