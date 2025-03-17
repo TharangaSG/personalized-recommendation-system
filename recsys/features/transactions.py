@@ -83,22 +83,17 @@ def get_day_of_week_feature(df: pl.DataFrame) -> pl.Series:
 
 
 def calculate_month_sin_cos(month: pl.Series) -> pl.DataFrame:
-    """
-    Calculate sine and cosine values for the month to capture cyclical patterns.
+    """Calculate sine and cosine values for the month to capture cyclical patterns."""
 
-    Parameters:
-    - month (pl.Series): A series containing month values.
+    C = 2 * np.pi / 12  # Normalization factor for cyclic encoding
 
-    Returns:
-    - pl.DataFrame: A DataFrame with 'month_sin' and 'month_cos' columns.
-    """
-    C = 2 * np.pi / 12
     return pl.DataFrame(
         {
-            "month_sin": month.apply(lambda x: np.sin(x * C)),
-            "month_cos": month.apply(lambda x: np.cos(x * C)),
+            "month_sin": month.map_elements(lambda x: np.sin(x * C), return_dtype=pl.Float64),
+            "month_cos": month.map_elements(lambda x: np.cos(x * C), return_dtype=pl.Float64),
         }
     )
+
 
 
 def convert_t_dat_to_epoch_milliseconds(df: pl.DataFrame) -> pl.Series:
@@ -139,38 +134,26 @@ def month_cos(month :pd.Series):
     """
     return np.cos(month * (2 * np.pi / 12))
 
-
 def compute_features_transactions(df: pl.DataFrame) -> pl.DataFrame:
-    """
-    Prepare transaction data by performing several data transformations.
-
-    This function does the following:
-    1. Converts 'article_id' to string type.
-    2. Converts 't_dat' to datetime type.
-    3. Extracts year, month, day, and day of week from 't_dat'.
-    4. Calculates sine and cosine of the month for cyclical feature encoding.
-    5. Converts 't_dat' to epoch milliseconds.
-
-    Parameters:
-    - df (pl.DataFrame): Input DataFrame containing transaction data.
-
-    Returns:
-    - pl.DataFrame: Processed DataFrame with transformed transaction data.
-    """
-
-    return (
-        df.with_columns(
-            [
-                pl.col("article_id").cast(pl.Utf8).alias("article_id"),
-            ]
-        )
-        .with_columns(
-            [
-                pl.col("t_dat").dt.year().alias("year"),
-                pl.col("t_dat").dt.month().alias("month"),
-                pl.col("t_dat").dt.day().alias("day"),
-                pl.col("t_dat").dt.weekday().alias("day_of_week"),
-            ]
-        )
-        .with_columns([(pl.col("t_dat").cast(pl.Int64) // 1_000_000).alias("t_dat")])
+    """Compute all necessary features on the transactions dataframe."""
+    
+    df = df.with_columns(
+        [
+            pl.col("article_id").cast(pl.Utf8).alias("article_id"),
+            convert_t_dat_to_datetime(df).alias("t_dat"),  # ✅ Convert 't_dat' to datetime
+        ]
     )
+
+    df = df.with_columns(
+        [
+            pl.col("t_dat").dt.year().alias("year"),
+            pl.col("t_dat").dt.month().alias("month"),
+            pl.col("t_dat").dt.day().alias("day"),
+            pl.col("t_dat").dt.weekday().alias("day_of_week"),
+        ]
+    )
+
+    df = df.with_columns(calculate_month_sin_cos(df["month"]))  # Add month_sin & month_cos
+
+    return df
+
